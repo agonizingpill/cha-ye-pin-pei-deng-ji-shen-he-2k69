@@ -39,6 +39,10 @@ class RepanelInput(PanelInput):
     grade: Grade
 
 
+class CorrectionInput(PanelInput):
+    reason: Note
+
+
 class ShareInput(BaseModel):
     lot_id: int = Field(gt=0)
     percent: Decimal = Field(gt=0, le=100, max_digits=5, decimal_places=2)

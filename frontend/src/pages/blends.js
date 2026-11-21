@@ -1,5 +1,5 @@
-import {esc, field, formData, formEnd, handle, header, memo, panelData, panelFields, panelStrip, percent, status} from '../components.js';
-import {GRADE, request, store} from '../store.js';
+import {esc, field, formData, formEnd, handle, header, memo, panelData, panelFields, panelStrip, percent, status, datetime} from '../components.js';
+import {GRADE, request, SCORES, store} from '../store.js';
 
 function shareRow(row = {}) {
   return `<div class="share-row"><label>原料批次<select name="lot" required><option value="">选择原料</option>
@@ -50,6 +50,30 @@ function formDataFrom(row) {
   return {lot: row.querySelector('[name=lot]').value, percent: row.querySelector('[name=percent]').value};
 }
 
+function basisHistory(review) {
+  const rows = [...(review.basis || [])].reverse();
+  if (rows.length < 2) return '';
+  return `<section class="basis-history"><h3>判级依据变更 <small>共 ${rows.length} 版，评分更正后重算</small></h3>
+    ${rows.map(row => `<details class="basis ${row.superseded_at ? 'past' : 'current'}">
+      <summary>依据 v${row.generation + 1} · ${row.cause === 'score_correction' ? '评分更正后重算' : '首次送审'}
+        ${row.superseded_at ? `· 已作废 ${esc(datetime(row.superseded_at))}` : '· 当前生效'}</summary>
+      <p class="mono digest">${esc(row.digest)}</p>
+      ${row.note ? `<blockquote>${esc(row.note)}</blockquote>` : ''}
+      <ul>${row.snapshot.ingredients.map(item => `<li>${esc(item.lot)} · 审评单 #${item.panel_id} · 香气 ${item.scores.aroma} · 汤体 ${item.scores.body} · 回甘 ${item.scores.sweetness} · 叶底 ${item.scores.leaf} · 杂味 ${item.scores.defect}</li>`).join('')}</ul>
+      ${row.result ? `<span class="muted">模型候选 ${GRADE[row.result.candidate]} · 置信度 ${percent(row.result.confidence)}</span>` : '<span class="muted">该版未完成计算即被更正取代。</span>'}
+    </details>`).join('')}</section>`;
+}
+
+function scoreChanges(review) {
+  const changes = review.score_changes || [];
+  if (!changes.length) return '';
+  return `<section class="score-changes"><h3>评分更正对照 <small>签发依据不被改写</small></h3>
+    <table><thead><tr><th>原料批</th><th>项目</th><th>签发时</th><th>现行</th></tr></thead><tbody>
+    ${changes.map(change => Object.keys(change.frozen).map(key => `<tr><td>${esc(change.lot)}</td>
+      <td>${esc(SCORES[key])}</td><td class="was">${change.frozen[key]}</td><td class="now">${change.current[key]}</td></tr>`).join('')).join('')}
+    </tbody></table></section>`;
+}
+
 function evidence(review) {
   const evidence = review.result;
   if (!evidence) return `<p class="empty">${review.state === 'failed' ? esc(review.failure) : '计算排队中，完成后显示复评决定。'}</p>`;
@@ -89,10 +113,15 @@ function blendDetail(blend) {
     <div class="ratio-band" aria-hidden="true">${blend.shares.map(row => `<div style="flex:${Number(row.percent)}"></div>`).join('')}</div>
     <ul>${blend.shares.map(row => `<li><strong>${esc(row.cultivar)}</strong><a href="#/lots/${row.lot_id}">${esc(row.code)}</a>
       <span>${esc(row.percent)}%</span>${!review ? status(row.lot_state) : ''}</li>`).join('')}</ul></section>
-    ${review ? `${evidence(review)}${review.repanel ? `<section><h3>独立复评 · ${esc(review.repanel.author)}</h3>
+    ${review ? `${evidence(review)}${scoreChanges(review)}<section class="review-ledger"><h3>审核记录 <small>依据 v${review.generation + 1}</small></h3>
+      ${review.generation ? '<p class="notice">原评分更正后已重算，先前的复评结果与初审记录作废。</p>' : ''}
+      ${review.repanel ? `<section><h4>独立复评 · ${esc(review.repanel.author)}</h4>
       ${panelStrip(review.repanel)}<blockquote>${esc(review.repanel.note)}</blockquote><p>${GRADE[review.repanel.grade]}</p></section>` : ''}
+      ${review.voided_repanels?.length ? `<details><summary>已作废的原盲复评 ${review.voided_repanels.length} 条</summary>
+        ${review.voided_repanels.map(panel => `<section class="voided"><small>${esc(panel.author)} · ${datetime(panel.invalidated_at)} 作废</small>
+          ${panelStrip(panel)}<blockquote>${esc(panel.note)}</blockquote><p>${GRADE[panel.grade]}</p></section>`).join('')}</details>` : ''}
       ${review.verified_by ? `<p class="muted">初审 ${esc(review.verified_by)}${review.signed_by ? ` · 主管 ${esc(review.signed_by)}` : ''}</p>` : ''}
-      ${review.final_grade ? `<div class="issued"><span>已签发等级</span><strong>${GRADE[review.final_grade]}</strong></div>` : ''}` : ''}
+      ${review.final_grade ? `<div class="issued"><span>已签发等级</span><strong>${GRADE[review.final_grade]}</strong></div>` : ''}</section>${basisHistory(review)}` : ''}
     ${reviewActions(blend, store.session.user)}</article>`;
 }
 

@@ -17,10 +17,55 @@ from .workflow import record
 
 logger = logging.getLogger('uvicorn.error')
 
+# Columns added after the first release; existing named volumes keep their data.
+UPGRADES = (
+    ('grade_review', 'generation', 'INTEGER NOT NULL DEFAULT 0'),
+    ('sensory_panel', 'supersedes_id', 'INTEGER NULL'),
+    ('sensory_panel', 'superseded_at', 'DATETIME NULL'),
+    ('sensory_panel', 'invalidated_at', 'DATETIME NULL'),
+)
+
+
+def upgrade():
+    """Bring a pre-existing tearoom database up to the current model without losing records."""
+    if engine.dialect.name != 'mysql':
+        return
+    with engine.begin() as conn:
+        for table, column, ddl in UPGRADES:
+            found = conn.exec_driver_sql(
+                'SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() '
+                'AND table_name=%s AND column_name=%s', (table, column)).first()
+            if not found:
+                conn.exec_driver_sql(f'ALTER TABLE {table} ADD COLUMN {column} {ddl}')
+        # An earlier schema allowed one repanel per review; corrections now retire the old
+        # repanel and add another, so the unique index has to give way to a plain one.
+        # The replacement index must exist first: MySQL keeps the FK's index requirement.
+        unique = [row[0] for row in conn.exec_driver_sql(
+            'SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema=DATABASE() '
+            'AND table_name=%s AND column_name=%s AND non_unique=0 AND index_name<>%s',
+            ('sensory_panel', 'review_id', 'PRIMARY')).all()]
+        if unique:
+            plain = conn.exec_driver_sql(
+                'SELECT 1 FROM information_schema.statistics WHERE table_schema=DATABASE() '
+                'AND table_name=%s AND index_name=%s',
+                ('sensory_panel', 'ix_sensory_panel_review_id')).first()
+            if not plain:
+                conn.exec_driver_sql('CREATE INDEX ix_sensory_panel_review_id ON sensory_panel (review_id)')
+            for name in unique:
+                conn.exec_driver_sql(f'ALTER TABLE sensory_panel DROP INDEX `{name}`')
+        # Every frozen snapshot becomes its first (and so far only) grading basis.
+        conn.exec_driver_sql("""
+            INSERT INTO grade_evidence (review_id, generation, cause, snapshot, digest, created_at)
+            SELECT r.id, 0, 'initial', r.snapshot, r.digest, r.created_at
+            FROM grade_review r LEFT JOIN grade_evidence e ON e.review_id = r.id
+            WHERE e.id IS NULL
+        """)
+
 
 @asynccontextmanager
 async def lifecycle(app):
     Base.metadata.create_all(engine)
+    upgrade()
     if os.getenv('SEED_DEMO', 'true').lower() == 'true':
         try:
             seed()

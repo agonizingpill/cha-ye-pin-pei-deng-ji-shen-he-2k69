@@ -49,6 +49,19 @@ def panel_lot(key: int, data: s.PanelInput, user: User = operator, db: Session =
     return present.panel_out(row, db)
 
 
+@router.post('/lots/{key}/panels/{panel}/correct')
+def correct_panel(key: int, panel: int, data: s.CorrectionInput, user: User = supervisor,
+                  db: Session = database):
+    lot = flow.require(db, TeaLot, key, lock=True)
+    original = flow.require(db, SensoryPanel, panel, lock=True)
+    corrected, affected = flow.correct_panel(db, lot, original, user, data)
+    db.commit()
+    for review in affected:
+        flow.wake(review.id, review.generation)
+    return {'panel': present.panel_out(corrected, db), 'corrected': panel,
+            'reviews': [present.review_out(row, db) for row in affected]}
+
+
 @router.post('/lots/{key}/sample', status_code=201)
 def retain_lot(key: int, data: s.SampleInput, user: User = sealer, db: Session = database):
     lot = flow.require(db, TeaLot, key, lock=True)
@@ -120,7 +133,7 @@ def retry(key: int, user: User = supervisor, db: Session = database):
     row.state, row.failure = State.QUEUED, None
     flow.record(db, user, 'grade.retry', key, row.digest)
     db.commit()
-    flow.wake(key)
+    flow.wake(key, row.generation)
     return present.review_out(row, db)
 
 

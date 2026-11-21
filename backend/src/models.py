@@ -73,20 +73,40 @@ class GradeReview(Base):
     snapshot: Mapped[dict] = mapped_column(JSON)
     digest: Mapped[str] = mapped_column(String(64))
     result: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    generation: Mapped[int] = mapped_column(default=0)
     verified_by: Mapped[int | None] = mapped_column(ForeignKey('tea_user.id'))
     signed_by: Mapped[int | None] = mapped_column(ForeignKey('tea_user.id'))
     final_grade: Mapped[str | None] = mapped_column(String(20))
     failure: Mapped[str | None] = mapped_column(Text)
     attempts: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    evidence: Mapped[list['GradeEvidence']] = relationship(
+        back_populates='review', cascade='all, delete-orphan', order_by='GradeEvidence.generation')
     __table_args__ = (UniqueConstraint('recipe_id', 'revision'),)
+
+
+class GradeEvidence(Base):
+    """One frozen grading basis. Corrections keep the old version for lookup."""
+    __tablename__ = 'grade_evidence'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    review_id: Mapped[int] = mapped_column(ForeignKey('grade_review.id'), index=True)
+    generation: Mapped[int]
+    cause: Mapped[str] = mapped_column(String(24))
+    note: Mapped[str | None] = mapped_column(Text)
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    digest: Mapped[str] = mapped_column(String(64))
+    result: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime)
+    review: Mapped['GradeReview'] = relationship(back_populates='evidence')
+    __table_args__ = (UniqueConstraint('review_id', 'generation'),)
 
 
 class SensoryPanel(Base):
     __tablename__ = 'sensory_panel'
     id: Mapped[int] = mapped_column(primary_key=True)
     lot_id: Mapped[int | None] = mapped_column(ForeignKey('tea_lot.id'))
-    review_id: Mapped[int | None] = mapped_column(ForeignKey('grade_review.id'), unique=True)
+    review_id: Mapped[int | None] = mapped_column(ForeignKey('grade_review.id'), index=True)
     author_id: Mapped[int] = mapped_column(ForeignKey('tea_user.id'))
     aroma: Mapped[int]
     body: Mapped[int]
@@ -95,6 +115,9 @@ class SensoryPanel(Base):
     defect: Mapped[int]
     note: Mapped[str] = mapped_column(Text)
     grade: Mapped[str | None] = mapped_column(String(20))
+    supersedes_id: Mapped[int | None] = mapped_column(ForeignKey('sensory_panel.id'))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     __table_args__ = (CheckConstraint('(lot_id IS NULL) <> (review_id IS NULL)'),)
 

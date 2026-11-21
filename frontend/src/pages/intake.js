@@ -1,6 +1,19 @@
 import {esc, field, formData, formEnd, handle, header, panelData, panelFields, panelStrip, shelfSample, status, datetime} from '../components.js';
 import {request, store} from '../store.js';
 
+function correctionForm(panel) {
+  return `<form class="correction-form form-stack" data-panel="${panel.id}"><h3>更正这笔评分 <small>审评单 #${panel.id}</small></h3>
+    <p class="muted">仅更正选中的这笔评分。引用它的未签发审核单会失效并按新评分重算，原盲复评与初审作废；已签发等级不变。</p>
+    ${panelFields()}<label>更正理由<textarea name="reason" minlength="2" maxlength="500" required></textarea></label>
+    ${formEnd('保存更正')}</form>`;
+}
+
+function panelNote(panel) {
+  if (panel.invalidated_at) return '<p class="status warn">此复评已因子评分更正作废</p>';
+  if (panel.superseded_at) return `<p class="status">已被更正 · ${esc(datetime(panel.superseded_at))}</p>`;
+  return '';
+}
+
 export function intake(root, id, refresh) {
   const canEdit = store.session.user.role === 'operator';
   const lot = store.lots.find(lot => lot.id === id) || store.lots[0];
@@ -32,14 +45,21 @@ export function intake(root, id, refresh) {
 export function sensory(root, id, refresh) {
   const current = store.lots.find(lot => lot.id === id) || store.lots[0];
   const editable = store.session.user.role === 'operator';
-  root.innerHTML = `${header('感官评审', '按批次录入冲泡评分。后续送审会冻结当时最新的一张审评单。')}
+  const canCorrect = store.session.user.role === 'supervisor';
+  root.innerHTML = `${header('感官评审', '按批次录入冲泡评分。送审会冻结当时生效的那一笔评分；评分更正后引用它的未签发审核单重算。')}
     ${current ? `<div class="work-grid sensory-grid"><section class="paper"><h2>冲泡记录</h2>
     <div class="lot-links">${store.lots.map(lot => `<a class="${lot.id === current.id ? 'active' : ''}" href="#/sensory/${lot.id}">${esc(lot.cultivar)}<small>${esc(lot.code)}</small></a>`).join('')}</div>
     <h3>${esc(current.cultivar)} · ${esc(current.origin)}</h3>
-    ${current.panels.map(panel => `<article class="panel-record">${panelStrip(panel)}
-      <blockquote>${esc(panel.note)}</blockquote><small>${esc(panel.author)} · ${datetime(panel.created_at)}</small></article>`).join('') || '<p class="empty">这批原料还没有审评单。</p>'}</section>
+    ${current.panels.map(panel => `<article class="panel-record ${panel.id === current.current_panel_id ? 'chosen' : ''}">${panelStrip(panel)}
+      ${panel.id === current.current_panel_id ? '<p class="status good">当前生效评分</p>' : ''}${panelNote(panel)}
+      <blockquote>${esc(panel.note)}</blockquote><small>${esc(panel.author)} · ${datetime(panel.created_at)}</small>
+      ${canCorrect && panel.id === current.current_panel_id ? correctionForm(panel) : ''}</article>`).join('') || '<p class="empty">这批原料还没有审评单。</p>'}</section>
       ${editable ? `<form id="panel-form" class="paper form-stack"><h2>填写审评单</h2><p class="muted">香气、汤体、回甘、叶底各 0–100 分。杂味扣分 0–20 分。</p>
       ${panelFields()}${formEnd('保存感官记录')}</form>` : ''}</div>` : '<p class="empty">登记原料后即可创建冲泡记录。</p>'}`;
   const form = root.querySelector('#panel-form');
   if (form) handle(form, element => request(`/lots/${current.id}/panels`, panelData(element)), () => refresh('感官记录已保存。'));
+  root.querySelectorAll('.correction-form').forEach(correction => handle(correction, element => {
+    const {reason, ...scores} = panelData(element);
+    return request(`/lots/${current.id}/panels/${correction.dataset.panel}/correct`, {...scores, reason});
+  }, row => refresh(`已更正评分，重算 ${row.reviews.length} 张审核单。`)));
 }
